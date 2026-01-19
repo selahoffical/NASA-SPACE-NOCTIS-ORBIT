@@ -1,0 +1,1084 @@
+  const assembleReportData = (): ReportData | null => {
+
+    if (!results) {
+
+      return null;
+
+    }
+
+
+
+    const totalDetections = results.stats.totalDetections;
+
+    const resolution = `${results.width.toLocaleString()} x ${results.height.toLocaleString()} px`;
+
+    const pixelScaleSummary =
+
+      results.pixelScale &&
+
+      Number.isFinite(results.pixelScale[0]) &&
+
+      Number.isFinite(results.pixelScale[1])
+
+        ? `${Math.abs(results.pixelScale[0] * results.pixelScale[1]).toFixed(2)} m2 per pixel`
+
+        : undefined;
+
+    const categoryBreakdown = Object.entries(categoryCounts)
+
+      .map(([id, count]) => ({
+
+        label: CATEGORY_LOOKUP[id as UrbanFeatureCategory]?.label ?? id,
+
+        count,
+
+        percent: totalDetections ? (count / totalDetections) * 100 : 0,
+
+      }))
+
+      .filter((entry) => entry.count > 0)
+
+      .sort((a, b) => b.count - a.count);
+
+
+
+    const semanticHighlights =
+
+      semanticSummary?.labels?.map((label) => ({
+
+        name: label.name,
+
+        coverage: label.coverage,
+
+        confidence: label.confidence,
+
+        visible: label.visible,
+
+      })) ?? [];
+
+
+
+    const semanticSampleCount =
+
+      semanticSummary?.annotations.length ?? (semanticExport?.geojson?.features?.length ?? 0);
+
+
+
+    const topDetections = results.boxes
+
+      .slice(0, Math.min(5, results.boxes.length))
+
+      .map((box) => ({
+
+        label: box.label,
+
+        confidence: formatConfidence(box.confidence),
+
+        area: formatArea(box.areaPixels, results.pixelScale),
+
+        centroid: `${Math.round(box.centroid.x)}, ${Math.round(box.centroid.y)}`,
+
+      }));
+
+
+
+    return {
+
+      generatedAt: new Date(),
+
+      totalDetections,
+
+      averageConfidence: results.stats.averageConfidence,
+
+      thresholdPercentile,
+
+      minAreaPixels,
+
+      maxDetections,
+
+      resolution,
+
+      bounds: results.bounds,
+
+      pixelScaleSummary,
+
+      categoryBreakdown,
+
+      semanticHighlights,
+
+      semanticSampleCount,
+
+      topDetections,
+
+      notes: {
+
+        title: reportTitle.trim() || "SAR Detection Intelligence Report",
+
+        analyst: reportAnalystNotes.trim(),
+
+        goals: reportGoals.trim(),
+
+        improvements: reportImprovements.trim(),
+
+        systems: reportSystems.trim() || DEFAULT_SYSTEMS_NOTE,
+
+      },
+
+    };
+
+  };
+
+
+
+  const generateReportHtml = (data: ReportData): string => {
+
+    const generatedAt = data.generatedAt.toLocaleString();
+
+    const detectionRows = [
+
+      ["Total detections", data.totalDetections.toLocaleString()],
+
+      ["Average confidence", formatConfidence(data.averageConfidence)],
+
+      ["Threshold percentile", `P${data.thresholdPercentile}`],
+
+      ["Minimum area", `${data.minAreaPixels} px^2`],
+
+      ["Max detections", data.maxDetections ? data.maxDetections.toString() : "Not limited"],
+
+      ["Scene resolution", data.resolution],
+
+      ["Pixel scale", data.pixelScaleSummary ?? "Not provided"],
+
+      ["Bounds", data.bounds ? data.bounds.map((value) => value.toFixed(4)).join(", ") : "Not provided"],
+
+    ]
+
+      .map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(String(value))}</td></tr>`)
+
+      .join("\n");
+
+
+
+    const categoryRows = data.categoryBreakdown.length
+
+      ? data.categoryBreakdown
+
+          .map(
+
+            (entry) =>
+
+              `<tr><td>${escapeHtml(entry.label)}</td><td>${entry.count}</td><td>${entry.percent.toFixed(1)}%</td></tr>`,
+
+          )
+
+          .join("\n")
+
+      : '<tr><td colspan="3">No detections recorded.</td></tr>';
+
+
+
+    const detectionsRows = data.topDetections.length
+
+      ? data.topDetections
+
+          .map(
+
+            (entry) =>
+
+              `<tr><td>${escapeHtml(entry.label)}</td><td>${escapeHtml(entry.confidence)}</td><td>${escapeHtml(entry.area)}</td><td>${escapeHtml(entry.centroid)}</td></tr>`,
+
+          )
+
+          .join("\n")
+
+      : '<tr><td colspan="4">No detections recorded.</td></tr>';
+
+
+
+    const semanticSection = data.semanticHighlights.length
+
+      ? `<section class="section">
+    <h2>Semantic Highlights</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Label</th>
+          <th>Coverage %</th>
+          <th>Confidence %</th>
+          <th>Visible</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${data.semanticHighlights
+          .map(
+            (entry) =>
+              `<tr><td>${escapeHtml(entry.name)}</td><td>${entry.coverage.toFixed(1)}</td><td>${entry.confidence.toFixed(0)}</td><td>${entry.visible ? "Yes" : "No"}</td></tr>`,
+          )
+          .join("\n")}
+      </tbody>
+    </table>
+    <p class="meta">Samples captured: ${data.semanticSampleCount}</p>
+  </section>`
+
+      : "";
+
+
+
+    const textBlock = (value: string, usePre = false) => {
+
+      if (!value) {
+
+        return '<p class="muted">No entry provided.</p>';
+
+      }
+
+      if (usePre) {
+
+        return `<pre>${escapeHtml(value)}</pre>`;
+
+      }
+
+      return `<p>${escapeHtml(value).replace(/\n/g, '<br />')}</p>`;
+
+    };
+
+
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(data.notes.title)}</title>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #081623; color: #eff6ff; margin: 0; padding: 32px; }
+    h1 { margin: 0 0 8px 0; font-size: 26px; }
+    h2 { margin: 0 0 12px 0; font-size: 18px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid rgba(148, 210, 255, 0.18); padding: 8px 12px; text-align: left; }
+    th { background: rgba(13, 40, 58, 0.6); }
+    tr:nth-child(even) { background: rgba(15, 32, 48, 0.35); }
+    .muted { color: #96a4b5; font-style: italic; }
+    .section { margin-top: 28px; padding: 20px; border-radius: 12px; background: rgba(9, 20, 34, 0.75); border: 1px solid rgba(59, 188, 255, 0.16); box-shadow: 0 12px 32px rgba(0, 37, 83, 0.35); }
+    .meta { color: #8fbce6; font-size: 13px; margin-bottom: 16px; }
+    pre { white-space: pre-wrap; background: rgba(12, 26, 40, 0.9); padding: 12px; border-radius: 8px; border: 1px solid rgba(59, 188, 255, 0.18); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>${escapeHtml(data.notes.title)}</h1>
+    <div class="meta">Generated ${escapeHtml(generatedAt)}</div>
+  </header>
+  <section class="section">
+    <h2>Mission Summary</h2>
+    ${textBlock(data.notes.analyst)}
+  </section>
+  <section class="section">
+    <h2>Detection Metrics</h2>
+    <table>
+      <tbody>
+        ${detectionRows}
+      </tbody>
+    </table>
+  </section>
+  <section class="section">
+    <h2>Category Breakdown</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Count</th>
+          <th>Share %</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${categoryRows}
+      </tbody>
+    </table>
+  </section>
+  <section class="section">
+    <h2>Top Detections</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Label</th>
+          <th>Confidence</th>
+          <th>Area</th>
+          <th>Centroid (px)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${detectionsRows}
+      </tbody>
+    </table>
+  </section>
+  ${semanticSection}
+  <section class="section">
+    <h2>Goals & Next Steps</h2>
+    ${textBlock(data.notes.goals)}
+  </section>
+  <section class="section">
+    <h2>Improvement Plan</h2>
+    ${textBlock(data.notes.improvements)}
+  </section>
+  <section class="section">
+    <h2>Models & Systems</h2>
+    ${textBlock(data.notes.systems, true)}
+  </section>
+</body>
+</html>`;
+
+  };
+
+
+
+  const generateReportPdfBlob = (data: ReportData): Blob => {
+
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    const marginX = 48;
+
+    const marginY = 56;
+
+    let cursorY = marginY;
+
+
+
+    const ensureSpace = (extra = 0) => {
+
+      if (cursorY + extra > pageHeight - marginY) {
+
+        doc.addPage();
+
+        cursorY = marginY;
+
+      }
+
+    };
+
+
+
+    const writeParagraph = (text: string) => {
+
+      const lines = doc.splitTextToSize(text, pageWidth - marginX * 2);
+
+      lines.forEach((line) => {
+
+        ensureSpace(14);
+
+        doc.text(line, marginX, cursorY);
+
+        cursorY += 14;
+
+      });
+
+    };
+
+
+
+    const addSection = (title: string, lines: string[]) => {
+
+      if (!lines.length) {
+
+        return;
+
+      }
+
+      ensureSpace(24);
+
+      doc.setFont("helvetica", "bold");
+
+      doc.setFontSize(14);
+
+      doc.text(title, marginX, cursorY);
+
+      cursorY += 18;
+
+      doc.setFont("helvetica", "normal");
+
+      doc.setFontSize(11);
+
+      lines.forEach((line) => writeParagraph(line));
+
+      cursorY += 6;
+
+    };
+
+
+
+    doc.setFont("helvetica", "bold");
+
+    doc.setFontSize(18);
+
+    doc.text(data.notes.title, marginX, cursorY);
+
+    cursorY += 24;
+
+
+
+    doc.setFont("helvetica", "normal");
+
+    doc.setFontSize(11);
+
+    doc.setTextColor(90);
+
+    doc.text(`Generated ${data.generatedAt.toLocaleString()}`, marginX, cursorY);
+
+    doc.setTextColor(0);
+
+    cursorY += 20;
+
+
+
+    if (data.notes.analyst) {
+
+      addSection("Mission Summary", [data.notes.analyst]);
+
+    }
+
+
+
+    addSection("Detection Metrics", [
+
+      `Total detections: ${data.totalDetections.toLocaleString()}`,
+
+      `Average confidence: ${formatConfidence(data.averageConfidence)}`,
+
+      `Threshold percentile: P${data.thresholdPercentile}`,
+
+      `Minimum area: ${data.minAreaPixels} px^2`,
+
+      `Max detections: ${data.maxDetections ?? "Not limited"}`,
+
+      `Scene resolution: ${data.resolution}`,
+
+      `Pixel scale: ${data.pixelScaleSummary ?? "Not provided"}`,
+
+      `Bounds: ${data.bounds ? data.bounds.map((value) => value.toFixed(4)).join(", ") : "Not provided"}`,
+
+    ]);
+
+
+
+    if (data.categoryBreakdown.length) {
+
+      addSection(
+
+        "Category Breakdown",
+
+        data.categoryBreakdown.map(
+
+          (entry) => `${entry.label}: ${entry.count} detections (${entry.percent.toFixed(1)}%)`,
+
+        ),
+
+      );
+
+    }
+
+
+
+    if (data.topDetections.length) {
+
+      addSection(
+
+        "Top Detections",
+
+        data.topDetections.map(
+
+          (entry) => `${entry.label} - ${entry.confidence}, ${entry.area}, centroid ${entry.centroid}`,
+
+        ),
+
+      );
+
+    }
+
+
+
+    if (data.semanticHighlights.length) {
+
+      const semanticLines = data.semanticHighlights.map(
+
+        (entry) =>
+
+          `${entry.name}: coverage ${entry.coverage.toFixed(1)}%, confidence ${entry.confidence.toFixed(0)}%, visible ${entry.visible ? "yes" : "no"}`,
+
+      );
+
+      if (data.semanticSampleCount) {
+
+        semanticLines.push(`Samples captured: ${data.semanticSampleCount}`);
+
+      }
+
+      addSection("Semantic Highlights", semanticLines);
+
+    }
+
+
+
+    if (data.notes.goals) {
+
+      addSection("Goals & Next Steps", data.notes.goals.split("\n"));
+
+    }
+
+
+
+    if (data.notes.improvements) {
+
+      addSection("Improvement Plan", data.notes.improvements.split("\n"));
+
+    }
+
+
+
+    if (data.notes.systems) {
+
+      addSection("Models & Systems", data.notes.systems.split("\n"));
+
+    }
+
+
+
+    return doc.output("blob");
+
+  };
+
+
+
+  const buildExportBundle = (format: ExportFormat): ExportBundle | null => {
+
+    if (!results) {
+
+      return null;
+
+    }
+
+
+
+    const generatedAt = new Date().toISOString();
+
+    const summary = semanticInsights ? semanticSummary : null;
+
+    const sampleGeojson = semanticExport?.geojson ?? null;
+
+
+
+    switch (format) {
+
+      case "json": {
+
+        const payload = {
+
+          meta: { format, generatedAt },
+
+          stats: results.stats,
+
+          thresholdValue: results.thresholdValue,
+
+          bounds: results.bounds ?? null,
+
+          pixelScale: results.pixelScale ?? null,
+
+          boxes: results.boxes,
+
+          semanticSummary: summary,
+
+          semanticSamples: sampleGeojson,
+
+        };
+
+        const json = JSON.stringify(payload, null, 2);
+
+        return {
+
+          format,
+
+          filename: summary || sampleGeojson ? "sar_detections_with_semantic.json" : "sar_detections.json",
+
+          mimeType: "application/json",
+
+          blob: new Blob([json], { type: "application/json" }),
+
+          textPreview: json,
+
+        };
+
+      }
+
+      case "csv": {
+
+        const header = [
+
+          "id",
+
+          "category_id",
+
+          "category_label",
+
+          "confidence",
+
+          "x",
+
+          "y",
+
+          "width",
+
+          "height",
+
+          "area_pixels",
+
+        ];
+
+        const rows = results.boxes.map((box) => [
+
+          escapeCsv(box.id),
+
+          escapeCsv(box.categoryId),
+
+          escapeCsv(box.label),
+
+          box.confidence.toFixed(4),
+
+          Math.round(box.bbox.x),
+
+          Math.round(box.bbox.y),
+
+          Math.round(box.bbox.width),
+
+          Math.round(box.bbox.height),
+
+          box.areaPixels,
+
+        ]);
+
+        let csv = [header, ...rows]
+
+          .map((cols) => cols.join(","))
+
+          .join("\r\n");
+
+
+
+        if (summary) {
+
+          csv += "\r\n\r\n# Semantic Label Summary";
+
+          csv += `\r\n# Total Classes,${summary.labels.length}`;
+
+          csv += `\r\n# Total Samples,${summary.annotations.length}`;
+
+          csv += "\r\nlabel,coverage_percent,confidence_percent,visible,sample_count";
+
+          summary.labels.forEach((label) => {
+
+            const sampleCount = semanticInsights?.counts[label.id] ?? 0;
+
+            csv += `\r\n${escapeCsv(label.name)},${label.coverage.toFixed(1)},${label.confidence.toFixed(0)},${label.visible ? "yes" : "no"},${sampleCount}`;
+
+          });
+
+        }
+
+
+
+        if (sampleGeojson) {
+
+          csv += "\r\n\r\n# Semantic Samples GeoJSON";
+
+          csv += `\r\n${JSON.stringify(sampleGeojson)}`;
+
+        }
+
+
+
+        return {
+
+          format,
+
+          filename: summary || sampleGeojson ? "sar_detections_bundle.csv" : "sar_detections.csv",
+
+          mimeType: "text/csv",
+
+          blob: new Blob([csv], { type: "text/csv" }),
+
+          textPreview: csv,
+
+        };
+
+      }
+
+      case "geojson": {
+
+        const detectionCollection: any = results.featureCollection
+
+          ? {
+
+              ...results.featureCollection,
+
+              features: [...results.featureCollection.features],
+
+            }
+
+          : { type: "FeatureCollection", features: [] };
+
+
+
+        if (sampleGeojson?.features?.length) {
+
+          detectionCollection.features = detectionCollection.features.concat(
+
+            sampleGeojson.features.map((feature: any) => ({
+
+              ...feature,
+
+              properties: {
+
+                ...(feature.properties ?? {}),
+
+                source: "semantic-sample",
+
+              },
+
+            })),
+
+          );
+
+        }
+
+
+
+        detectionCollection.properties = {
+
+          ...(detectionCollection.properties ?? {}),
+
+          stats: results.stats,
+
+          thresholdValue: results.thresholdValue,
+
+          generatedAt,
+
+          semanticSummary: summary ?? undefined,
+
+        };
+
+
+
+        const geojson = JSON.stringify(detectionCollection, null, 2);
+
+        return {
+
+          format,
+
+          filename: summary || sampleGeojson ? "sar_detections_with_samples.geojson" : "sar_detections.geojson",
+
+          mimeType: "application/geo+json",
+
+          blob: new Blob([geojson], { type: "application/geo+json" }),
+
+          textPreview: geojson,
+
+        };
+
+      }
+
+      case "overlay": {
+
+        return {
+
+          format,
+
+          filename: "sar_detection_overlay.png",
+
+          mimeType: "image/png",
+
+          directUrl: results.overlayUrl,
+
+        };
+
+      }
+
+      case "report-html": {
+
+        const reportData = assembleReportData();
+
+        if (!reportData) {
+
+          return null;
+
+        }
+
+        const html = generateReportHtml(reportData);
+
+        return {
+
+          format,
+
+          filename: createSafeFilename(reportData.notes.title, "-report.html"),
+
+          mimeType: "text/html",
+
+          blob: new Blob([html], { type: "text/html" }),
+
+          textPreview: html,
+
+        };
+
+      }
+
+      case "report-pdf": {
+
+        const reportData = assembleReportData();
+
+        if (!reportData) {
+
+          return null;
+
+        }
+
+        const pdfBlob = generateReportPdfBlob(reportData);
+
+        return {
+
+          format,
+
+          filename: createSafeFilename(reportData.notes.title, "-report.pdf"),
+
+          mimeType: "application/pdf",
+
+          blob: pdfBlob,
+
+        };
+
+      }
+
+      default:
+
+        return null;
+
+    }
+
+  };
+
+
+
+  const triggerDownload = (href: string, filename: string) => {
+
+    if (typeof window === "undefined") {
+
+      return;
+
+    }
+
+
+
+    const link = document.createElement("a");
+
+    link.href = href;
+
+    link.download = filename;
+
+    link.rel = "noopener";
+
+    document.body.appendChild(link);
+
+    link.click();
+
+    document.body.removeChild(link);
+
+  };
+
+
+
+  const handleDownload = (format: ExportFormat) => {
+
+    const bundle = buildExportBundle(format);
+
+    if (!bundle) {
+
+      return;
+
+    }
+
+
+
+    if (bundle.format === "overlay") {
+
+      triggerDownload(bundle.directUrl, bundle.filename);
+
+      return;
+
+    }
+
+
+
+    const objectUrl = URL.createObjectURL(bundle.blob);
+
+    triggerDownload(objectUrl, bundle.filename);
+
+    if (typeof window !== "undefined") {
+
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
+
+    }
+
+  };
+
+
+
+  const previewTitleForFormat = (format: ExportFormat): string => {
+
+    switch (format) {
+
+      case "json":
+
+        return "Detections JSON";
+
+      case "csv":
+
+        return "Detection CSV";
+
+      case "geojson":
+
+        return "GeoJSON Bundle";
+
+      case "report-html":
+
+        return "HTML Report";
+
+      case "report-pdf":
+
+        return "PDF Report";
+
+      case "overlay":
+
+        return "Overlay Preview";
+
+      default:
+
+        return "Preview";
+
+    }
+
+  };
+
+
+
+  const handlePreviewDeliverable = (format: ExportFormat) => {
+
+    const bundle = buildExportBundle(format);
+
+    if (!bundle) {
+
+      return;
+
+    }
+
+
+
+    if (previewState?.kind === "pdf" && previewState.objectUrl) {
+
+      URL.revokeObjectURL(previewState.objectUrl);
+
+    }
+
+
+
+    if (bundle.format === "overlay") {
+
+      setPreviewState({
+
+        kind: "image",
+
+        title: previewTitleForFormat(format),
+
+        url: bundle.directUrl,
+
+        format: "overlay",
+
+      });
+
+      setIsPreviewOpen(true);
+
+      return;
+
+    }
+
+
+
+    if (format === "report-pdf") {
+
+      const reportData = assembleReportData();
+
+      const objectUrl = URL.createObjectURL(bundle.blob);
+
+      setPreviewState({
+
+        kind: "pdf",
+
+        title: reportData?.notes.title ? `${reportData.notes.title} (PDF)` : previewTitleForFormat(format),
+
+        url: objectUrl,
+
+        format: "report-pdf",
+
+        objectUrl,
+
+      });
+
+      setIsPreviewOpen(true);
+
+      return;
+
+    }
+
+
+
+    setPreviewState({
+
+      kind: "text",
+
+      title: previewTitleForFormat(format),
+
+      content: bundle.textPreview ?? "",
+
+      format: format as "json" | "csv" | "geojson" | "report-html",
+
+    });
+
+    setIsPreviewOpen(true);
+
+  };
+
+
+
+  const handlePreviewOpenChange = (open: boolean) => {
+
+    if (!open && previewState?.kind === "pdf" && previewState.objectUrl) {
+
+      URL.revokeObjectURL(previewState.objectUrl);
+
+    }
+
+
+
+    if (!open) {
+
+      setPreviewState(null);
+
+    }
+
+
+
+    setIsPreviewOpen(open);
+
+  };
+
+
+

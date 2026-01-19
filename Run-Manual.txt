@@ -1,0 +1,7 @@
+after downloading all the files , you have to open the folder in vs code (forexample) and install extensions for java and Typescript.
+
+then go to terminal and run the code : 
+npm install
+npm run dev
+
+then go to the local link that given in terminal and import before after tif files. but be careful you can only upload 1 set of before after . if its vv only vv if its vh then only vh.
